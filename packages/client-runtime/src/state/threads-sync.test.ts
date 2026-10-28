@@ -782,6 +782,65 @@ describe("EnvironmentThreads", () => {
       }),
     );
 
+    it.effect.each(["deferred", "complete"] as const)(
+      "settles a replaced work request when the new snapshot is %s",
+      (mode) =>
+        Effect.gen(function* () {
+          const anchor = {
+            ...command("anchor", "completed"),
+            deferredWork: { cursor: "before", itemCount: 80, lastOrdinal: 80 },
+          };
+          const asked = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const harness = yield* makeHarness({
+            cached: {
+              ...BASE_PROJECTION,
+              turnItems: [anchor],
+              visibleTurnItems: [localRow(anchor, 0)],
+            },
+            historyHttpClient: HttpClient.make((request) =>
+              Effect.gen(function* () {
+                yield* Deferred.succeed(asked, undefined);
+                yield* Deferred.await(release);
+                return HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({
+                    snapshotSequence: 7,
+                    items: [],
+                    nextCursor: null,
+                    hasMoreHistory: false,
+                  }),
+                );
+              }),
+            ),
+          });
+          const loading = yield* harness.loadWork(anchor.id).pipe(Effect.forkChild);
+          yield* Deferred.await(asked);
+          const replacement =
+            mode === "deferred"
+              ? { ...anchor, deferredWork: { ...anchor.deferredWork, cursor: "after" } }
+              : command("anchor", "completed");
+          yield* Queue.offer(
+            harness.inputs,
+            snapshot(
+              {
+                ...BASE_PROJECTION,
+                thread: { ...BASE_PROJECTION.thread, title: "Replacement" },
+                turnItems: [replacement],
+                visibleTurnItems: [localRow(replacement, 0)],
+              },
+              CACHED_SNAPSHOT_SEQUENCE + 1,
+            ),
+          );
+          yield* awaitThreadState(
+            harness.observed,
+            (value) => Option.getOrNull(value.data)?.thread.title === "Replacement",
+          );
+          yield* Deferred.succeed(release, undefined);
+          expect((yield* Fiber.join(loading))._tag).toBe(mode === "deferred" ? "error" : "noop");
+        }),
+    );
+
     it.effect("loads targeted messages without fetching unrelated deferred work", () =>
       Effect.gen(function* () {
         const anchor = {

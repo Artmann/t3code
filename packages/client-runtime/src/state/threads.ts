@@ -788,10 +788,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         })),
       ),
     );
-    if (workAnchorId !== undefined && result._tag === "loaded") {
+    if (workAnchorId !== undefined && (result._tag === "loaded" || result._tag === "noop")) {
       const remaining = Option.getOrNull(
         (yield* SubscriptionRef.get(state)).data,
       )?.visibleTurnItems.find((row) => row.sourceItemId === workAnchorId)?.item.deferredWork;
+      if (result._tag === "noop" && remaining !== undefined)
+        return { _tag: "error", message: "Work history changed. Retry loading it." };
       if (remaining?.cursor === requestCursor)
         return { _tag: "error", message: "Work history did not advance." };
       if (remaining !== undefined) return yield* loadEarlier(undefined, workAnchorId);
