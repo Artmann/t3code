@@ -126,6 +126,17 @@ describe("browse entry filtering", () => {
     expect(names("xyz")).toEqual([]);
   });
 
+  it("ranks a word-start match in a long name above any substring match", () => {
+    const longName = `${"a".repeat(240)}-foo`;
+    const folders = [
+      { name: "xfoo", fullPath: "~/xfoo" },
+      { name: longName, fullPath: "~/long" },
+    ];
+    expect(
+      filterFilesystemBrowseEntries(folders, "foo").visibleEntries.map((entry) => entry.name),
+    ).toEqual([longName, "xfoo"]);
+  });
+
   it("shows dot folders only when the query starts with a dot", () => {
     expect(names("t3")).not.toContain(".t3");
     expect(filterFilesystemBrowseEntries(entries, ".t3")).toEqual({

@@ -82,14 +82,15 @@ export function filterFilesystemBrowseEntries(
       : candidates
           .map((entry) => ({
             entry,
+            // Position penalties stay under 1000 for 255-character names, so tiers never overlap.
             score: scoreQueryMatch({
               value: entry.name.toLowerCase(),
               query: lowerQuery,
               exactBase: 0,
-              prefixBase: 100,
-              boundaryBase: 200,
-              includesBase: 300,
-              fuzzyBase: 400,
+              prefixBase: 1000,
+              boundaryBase: 2000,
+              includesBase: 3000,
+              fuzzyBase: 4000,
               boundaryMarkers: [" ", "-", "_", "."],
             }),
           }))
