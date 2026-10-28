@@ -1811,6 +1811,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
+    const inlineWorkOutput = sql`item.type = 'dynamic_tool' AND (
+      item.payload_json LIKE '%htmlRender%' OR item.payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`}
+      OR item.payload_json LIKE '%"viewedImagePath"%'
+      OR item.payload_json LIKE '%"toolName":"%delegate_task"%')`;
+
     const keepRecordedRunField = (payload: Statement.Fragment, path: string) => sql`
       CASE
         WHEN json_type(excluded.payload_json, ${path}) IS NULL
@@ -2853,12 +2858,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       OVER (PARTITION BY run_id ORDER BY ordinal) AS segment,
                     CASE WHEN status = 'completed' AND (run_status = 'completed' OR attempt_status = 'superseded')
                       AND type IN ('command_execution', 'reasoning', 'file_change', 'file_search', 'web_search', 'dynamic_tool')
-                      AND (type <> 'dynamic_tool' OR (
-                        payload_json NOT LIKE '%htmlRender%' AND payload_json NOT LIKE ${`%${MCP_APP_OUTPUT_KEY}%`}
-                        AND payload_json NOT LIKE '%"viewedImagePath"%'))
+                      AND NOT (${inlineWorkOutput})
                       AND run_id NOT IN (SELECT run_id FROM blocked_runs)
                       THEN 1 ELSE 0 END AS can_defer
-                  FROM eligible
+                  FROM eligible AS item
                   WHERE ${window.deferWork ? 1 : 0} = 1
                     AND ${boundary.latest === null ? 0 : 1} = 1
                     AND ordinal >= ${boundary.ordinal}
@@ -5330,11 +5333,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ${includePersistentOutput ? sql`attempt.attempt_id` : sql`NULL`} AS attempt_id,
           ${includePersistentOutput ? sql`attempt.status` : sql`NULL`} AS attempt_status,
           ${
-            includePersistentOutput
-              ? sql`CASE WHEN item.type = 'dynamic_tool' AND (item.payload_json LIKE '%htmlRender%'
-              OR item.payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`}
-              OR item.payload_json LIKE '%"viewedImagePath"%') THEN 1 ELSE 0 END`
-              : sql`0`
+            includePersistentOutput ? sql`CASE WHEN ${inlineWorkOutput} THEN 1 ELSE 0 END` : sql`0`
           } AS persistent_output,
           CASE WHEN item.type = 'user_message' THEN json_extract(item.payload_json, '$.inputIntent') END AS input_intent,
           CASE WHEN item.type = 'user_message' THEN json_extract(item.payload_json, '$.createdBy') END AS created_by,

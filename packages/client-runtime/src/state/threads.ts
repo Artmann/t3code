@@ -691,7 +691,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         ? { _tag: "error", message: "Work history changed. Retry loading it." }
         : { _tag: "noop" };
     if (workAnchorId === undefined)
-      yield* patchHistoryMeta((history) => ({ ...history, loading: true, error: null }));
+      yield* patchHistoryMeta((history) =>
+        isActiveHistoryRequestCursor(requestCursor, history)
+          ? { ...history, loading: true, error: null }
+          : history,
+      );
     const failLoad = (message: string) =>
       SubscriptionRef.modify(
         state,

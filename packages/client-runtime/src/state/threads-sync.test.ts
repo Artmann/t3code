@@ -22,6 +22,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
+import * as Scheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -902,6 +903,47 @@ describe("EnvironmentThreads", () => {
           yield* Deferred.succeed(release, undefined);
           expect((yield* Fiber.join(loading))._tag).toBe(mode === "deferred" ? "error" : "noop");
         }),
+    );
+
+    it.effect("does not mark replacement history loading when a queued request becomes stale", () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({
+          cached: BASE_PROJECTION,
+          cachedHistory: { historyCursor: "older", hasMoreHistory: true },
+          historyHttpClient: HttpClient.make((request) =>
+            Effect.succeed(historyPage(request, [], null)),
+          ),
+        });
+        const held = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const replacement = yield* SubscriptionRef.updateEffect(harness.threadState, (latest) =>
+          Deferred.succeed(held, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as({ ...latest, history: { ...latest.history, historyCursor: "replacement" } }),
+          ),
+        ).pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(held);
+        const dispatcher = new Scheduler.MixedScheduler("sync").makeDispatcher();
+        const loading = yield* harness
+          .loadEarlier()
+          .pipe(
+            Effect.forkChild({ startImmediately: true }),
+            Effect.provideService(Scheduler.Scheduler, {
+              executionMode: "sync",
+              shouldYield: () => false,
+              makeDispatcher: () => dispatcher,
+            }),
+          );
+        dispatcher.flush();
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(replacement);
+        dispatcher.flush();
+        expect(yield* Fiber.join(loading)).toEqual({ _tag: "noop" });
+        expect((yield* SubscriptionRef.get(harness.threadState)).history).toMatchObject({
+          historyCursor: "replacement",
+          loading: false,
+        });
+      }),
     );
 
     it.effect("loads targeted messages without fetching unrelated deferred work", () =>
