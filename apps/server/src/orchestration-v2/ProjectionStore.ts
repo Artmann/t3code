@@ -2698,10 +2698,19 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       const eligible = sql`
                 WITH eligible AS NOT MATERIALIZED (
                   SELECT item.rowid AS item_rowid, item.payload_json, item.ordinal, item.turn_item_id,
-                    item.run_id, item.node_id, item.type, item.status, run.status AS run_status
+                    item.run_id, item.node_id, item.type, item.status, run.status AS run_status,
+                    attempt.attempt_id, attempt.status AS attempt_status
                   FROM orchestration_v2_projection_turn_items AS item
                   LEFT JOIN orchestration_v2_projection_runs AS run
                     ON run.run_id = item.run_id
+                  LEFT JOIN orchestration_v2_projection_nodes AS node
+                    ON ${window.deferWork ? 1 : 0} = 1 AND node.node_id = item.node_id
+                  LEFT JOIN orchestration_v2_projection_run_attempts AS attempt
+                    ON ${window.deferWork ? 1 : 0} = 1 AND attempt.attempt_id = (
+                      SELECT attempt_id FROM orchestration_v2_projection_run_attempts
+                      WHERE run_id = item.run_id AND root_node_id = COALESCE(node.root_node_id, item.node_id)
+                      ORDER BY attempt_ordinal DESC LIMIT 1
+                    )
                   WHERE item.thread_id = ${threadId}
                     AND item.ordinal <= COALESCE(
                       (
@@ -2839,10 +2848,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     AND (type IN ('run_interrupt_request', 'run_interrupt_result')
                       OR (type = 'error' AND status = 'failed' AND parent_item_id IS NULL))
                 ), work_segments AS (
-                  SELECT item_rowid, ordinal, turn_item_id, run_id, type,
+                  SELECT item_rowid, ordinal, turn_item_id, run_id, type, attempt_id,
                     MAX(CASE WHEN type = 'user_message' THEN ordinal ELSE 0 END)
                       OVER (PARTITION BY run_id ORDER BY ordinal) AS segment,
-                    CASE WHEN status = 'completed' AND run_status = 'completed'
+                    CASE WHEN status = 'completed' AND (run_status = 'completed' OR attempt_status = 'superseded')
                       AND type IN ('command_execution', 'reasoning', 'file_change', 'file_search', 'web_search', 'dynamic_tool')
                       AND (type <> 'dynamic_tool' OR (
                         payload_json NOT LIKE '%htmlRender%' AND payload_json NOT LIKE ${`%${MCP_APP_OUTPUT_KEY}%`}
@@ -2854,10 +2863,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     AND ${boundary.latest === null ? 0 : 1} = 1
                     AND ordinal >= ${boundary.ordinal}
                 ), deferred_work AS (
-                  SELECT run_id, segment, MIN(ordinal) AS first_ordinal,
+                  SELECT run_id, segment, attempt_id, MIN(ordinal) AS first_ordinal,
                     MAX(ordinal) AS last_ordinal, COUNT(*) AS item_count
                   FROM work_segments WHERE can_defer = 1
-                  GROUP BY run_id, segment HAVING COUNT(*) > ${window.inlineWorkItemLimit ?? THREAD_HISTORY_PAGE_POLICY.maxItems}
+                  GROUP BY run_id, segment, attempt_id HAVING COUNT(*) > ${window.inlineWorkItemLimit ?? THREAD_HISTORY_PAGE_POLICY.maxItems}
                 ), window_items AS NOT MATERIALIZED (
                   SELECT item_rowid, ordinal, turn_item_id, run_id, type
                   FROM eligible WHERE ${window.deferWork ? 1 : 0} = 0
@@ -2866,6 +2875,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   SELECT item.item_rowid, item.ordinal, item.turn_item_id, item.run_id, item.type
                   FROM work_segments item LEFT JOIN deferred_work deferred
                     ON deferred.run_id = item.run_id AND deferred.segment = item.segment
+                    AND deferred.attempt_id IS item.attempt_id
                   WHERE item.can_defer = 0 OR deferred.run_id IS NULL OR item.ordinal = deferred.first_ordinal
                 ), latest_user_turn AS (
                   -- Mirrors selectOlderTimelinePage: whole turns while the
@@ -5306,6 +5316,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       readonly createdBy?: "user" | "agent" | "system";
       readonly messageId?: MessageId;
       readonly runStatus?: string | undefined;
+      readonly attemptId?: string | null;
+      readonly attemptStatus?: string | null;
       readonly persistentOutput?: boolean;
       readonly deferredWork?: OrchestrationV2TurnItem["deferredWork"];
     };
@@ -5342,19 +5354,34 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           status: OrchestrationV2TurnItem["status"];
           ordinal: number;
           persistent_output: number;
-        }>`SELECT turn_item_id, run_id, node_id, parent_item_id, type, status, ordinal,
+          attempt_id: string | null;
+          attempt_status: string | null;
+        }>`SELECT item.turn_item_id, item.run_id, item.node_id, item.parent_item_id, item.type, item.status, item.ordinal,
+          ${includePersistentOutput ? sql`attempt.attempt_id` : sql`NULL`} AS attempt_id,
+          ${includePersistentOutput ? sql`attempt.status` : sql`NULL`} AS attempt_status,
           ${
             includePersistentOutput
-              ? sql`CASE WHEN type = 'dynamic_tool' AND (payload_json LIKE '%htmlRender%'
-              OR payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`}
-              OR payload_json LIKE '%"viewedImagePath"%') THEN 1 ELSE 0 END`
+              ? sql`CASE WHEN item.type = 'dynamic_tool' AND (item.payload_json LIKE '%htmlRender%'
+              OR item.payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`}
+              OR item.payload_json LIKE '%"viewedImagePath"%') THEN 1 ELSE 0 END`
               : sql`0`
           } AS persistent_output,
-          CASE WHEN type = 'user_message' THEN json_extract(payload_json, '$.inputIntent') END AS input_intent,
-          CASE WHEN type = 'user_message' THEN json_extract(payload_json, '$.createdBy') END AS created_by,
-          CASE WHEN type IN ('user_message', 'assistant_message') THEN json_extract(payload_json, '$.messageId') END AS message_id
-        FROM orchestration_v2_projection_turn_items WHERE thread_id = ${threadId}
-        ORDER BY ordinal ASC, turn_item_id ASC`;
+          CASE WHEN item.type = 'user_message' THEN json_extract(item.payload_json, '$.inputIntent') END AS input_intent,
+          CASE WHEN item.type = 'user_message' THEN json_extract(item.payload_json, '$.createdBy') END AS created_by,
+          CASE WHEN item.type IN ('user_message', 'assistant_message') THEN json_extract(item.payload_json, '$.messageId') END AS message_id
+        FROM orchestration_v2_projection_turn_items AS item
+        ${
+          includePersistentOutput
+            ? sql`LEFT JOIN orchestration_v2_projection_nodes AS node ON node.node_id = item.node_id
+        LEFT JOIN orchestration_v2_projection_run_attempts AS attempt ON attempt.attempt_id = (
+          SELECT attempt_id FROM orchestration_v2_projection_run_attempts
+          WHERE run_id = item.run_id AND root_node_id = COALESCE(node.root_node_id, item.node_id)
+          ORDER BY attempt_ordinal DESC LIMIT 1
+        )`
+            : sql``
+        }
+        WHERE item.thread_id = ${threadId}
+        ORDER BY item.ordinal ASC, item.turn_item_id ASC`;
         const runStatuses = new Map(records.runs.map((run) => [String(run.id), run.status]));
         const items: Array<TimelineIndexItem> = rows.map((row) => ({
           id: TurnItemId.make(row.turn_item_id),
@@ -5366,6 +5393,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           status: row.status,
           ordinal: row.ordinal,
           runStatus: row.run_id === null ? undefined : runStatuses.get(row.run_id),
+          attemptId: row.attempt_id,
+          attemptStatus: row.attempt_status,
           persistentOutput: row.persistent_output === 1,
           ...(row.input_intent === null ? {} : { inputIntent: row.input_intent }),
           ...(row.created_by === null ? {} : { createdBy: row.created_by }),

@@ -169,6 +169,19 @@ describe("threadHistoryPaging", () => {
     }));
     expect(deferWorkHistoryRows(longWork.slice(0, 150), [], 150)).toHaveLength(150);
     expect(deferWorkHistoryRows(longWork, [], 150)[0]?.item.deferredWork?.itemCount).toBe(151);
+    const superseded = work.map((row) => ({
+      ...row,
+      item: { ...row.item, runStatus: "running", attemptId: "old", attemptStatus: "superseded" },
+    }));
+    const active = work.map((row, index) => ({
+      ...row,
+      sourceItemId: TurnItemId.make(`active-${index}`),
+      position: row.position + work.length,
+      item: { ...row.item, runStatus: "running", attemptId: "active", attemptStatus: "running" },
+    }));
+    const attempts = deferWorkHistoryRows([...superseded, ...active]);
+    expect(attempts[0]?.item.deferredWork?.itemCount).toBe(76);
+    expect(attempts.slice(1)).toEqual(active);
     const compaction = {
       ...work[0]!,
       sourceItemId: TurnItemId.make("compaction"),

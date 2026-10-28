@@ -2009,6 +2009,67 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         workCursor = page.nextCursor;
       }
       assert.strictEqual(workIds.size, 999);
+      const sharedRunId = "run:bounded-sql-history:1";
+      for (const [ordinal, status] of [
+        [0, "completed"],
+        [1, "superseded"],
+        [2, "running"],
+      ] as const) {
+        const attempt = {
+          id: `attempt:bounded-sql-history:${ordinal}`,
+          runId: sharedRunId,
+          attemptOrdinal: ordinal + 1,
+          rootNodeId: `node:bounded-sql-history:attempt-${ordinal === 0 ? 1 : ordinal}`,
+          providerInstanceId,
+          providerThreadId: "provider-thread:bounded-sql-history",
+          providerTurnId: null,
+          reason: ordinal === 1 ? "initial" : "steering_restart",
+          status,
+          startedAt: nowIso,
+          completedAt: status === "superseded" ? nowIso : null,
+        };
+        yield* sql`INSERT INTO orchestration_v2_projection_run_attempts
+          (attempt_id, thread_id, run_id, attempt_ordinal, root_node_id, provider, provider_instance_id, provider_thread_id, provider_turn_id, status, payload_json)
+          VALUES (${attempt.id}, ${threadId}, ${sharedRunId}, ${attempt.attemptOrdinal}, ${attempt.rootNodeId}, ${providerInstanceId}, ${providerInstanceId}, ${attempt.providerThreadId}, NULL, ${status}, ${encodeUnknownJsonString(attempt)})`;
+      }
+      yield* sql`UPDATE orchestration_v2_projection_turn_items
+        SET node_id = CASE WHEN ordinal < 990 AND ordinal <> 10 THEN 'node:bounded-sql-history:attempt-1' ELSE 'node:bounded-sql-history:attempt-2' END,
+          payload_json = json_set(payload_json, '$.nodeId', CASE WHEN ordinal < 990 AND ordinal <> 10 THEN 'node:bounded-sql-history:attempt-1' ELSE 'node:bounded-sql-history:attempt-2' END)
+        WHERE thread_id = ${threadId}`;
+      for (const status of ["completed", "running"]) {
+        yield* sql`UPDATE orchestration_v2_projection_runs SET status = ${status},
+          payload_json = json_set(payload_json, '$.status', ${status}) WHERE run_id = ${sharedRunId}`;
+        const window = yield* projectionStore.getThreadSnapshotWindow(threadId, {
+          rowLimit: sqlPageLimit,
+          userTurnLimit: 10,
+          deferWork: true,
+          inlineWorkItemLimit: 150,
+        });
+        const oldWork = window.projection.visibleTurnItems.find((row) => row.item.deferredWork);
+        assert.strictEqual(oldWork?.item.deferredWork?.itemCount, 987);
+        let cursor: string | null = oldWork!.item.deferredWork!.cursor;
+        const loaded = new Set<TurnItemId>();
+        for (let pages = 0; cursor !== null; pages += 1) {
+          assert.isBelow(pages, 20);
+          const page: OrchestrationV2ThreadHistoryPage =
+            yield* projectionStore.getThreadHistoryPage(
+              threadId,
+              cursor,
+              oldWork!.sourceItemId,
+              false,
+              "work",
+            );
+          for (const row of page.items) loaded.add(row.sourceItemId);
+          cursor = page.nextCursor;
+        }
+        assert.strictEqual(loaded.size, 987);
+        assert.isFalse(loaded.has(TurnItemId.make("turn-item:bounded-sql-history:10")));
+      }
+      yield* sql`DELETE FROM orchestration_v2_projection_run_attempts WHERE thread_id = ${threadId}`;
+      yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed',
+        payload_json = json_set(payload_json, '$.status', 'completed') WHERE run_id = ${sharedRunId}`;
+      yield* sql`UPDATE orchestration_v2_projection_turn_items SET node_id = NULL,
+        payload_json = json_set(payload_json, '$.nodeId', NULL) WHERE thread_id = ${threadId}`;
       yield* sql`UPDATE orchestration_v2_projection_turn_items SET run_id = NULL,
         payload_json = json_set(payload_json, '$.runId', NULL)
         WHERE thread_id = ${threadId} AND ordinal > 1 AND ordinal < 851`;

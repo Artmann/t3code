@@ -65,6 +65,8 @@ type HistoryRow = Pick<
     readonly parentItemId?: string | null;
     readonly ordinal?: number;
     readonly runStatus?: string | undefined;
+    readonly attemptId?: string | null | undefined;
+    readonly attemptStatus?: string | null | undefined;
     readonly persistentOutput?: boolean;
     readonly deferredWork?: OrchestrationV2TurnItem["deferredWork"];
   };
@@ -232,12 +234,13 @@ export function deferWorkHistoryRows<Row extends HistoryRow>(
     if (item.runId == null) continue;
     if (item.type === "user_message") segments.set(item.runId, (segments.get(item.runId) ?? 0) + 1);
     if (
-      (item.runStatus ?? statuses.get(item.runId)) !== "completed" ||
+      ((item.runStatus ?? statuses.get(item.runId)) !== "completed" &&
+        item.attemptStatus !== "superseded") ||
       blocked.has(item.runId) ||
       !isDeferrableWorkItem({ ...item, status: item.status ?? "idle" })
     )
       continue;
-    const key = `${row.sourceThreadId}:${item.runId}:${segments.get(item.runId) ?? 0}`;
+    const key = `${row.sourceThreadId}:${item.runId}:${segments.get(item.runId) ?? 0}:${item.attemptId ?? ""}`;
     const group = groups.get(key) ?? [];
     group.push(row);
     groups.set(key, group);
@@ -288,6 +291,7 @@ export function selectDeferredWorkPage<Row extends HistoryRow>(input: {
       (row) =>
         row.sourceThreadId === anchor.sourceThreadId &&
         row.item.runId === anchor.item.runId &&
+        row.item.attemptId === anchor.item.attemptId &&
         isDeferrableWorkItem({ ...row.item, status: row.item.status ?? "idle" }),
     );
   return selectOlderTimelinePage({

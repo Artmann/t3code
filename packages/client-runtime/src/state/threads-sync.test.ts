@@ -725,6 +725,85 @@ describe("EnvironmentThreads", () => {
       sourceItemId: item.id,
       item,
     });
+    it.effect("loads a long unwrapped turn through its user message and resumes failed pages", () =>
+      Effect.gen(function* () {
+        const prompt = {
+          ...command("prompt", "completed", 0, 0),
+          type: "user_message" as const,
+          messageId: MessageId.make("prompt"),
+          inputIntent: "turn_start" as const,
+          createdBy: "user" as const,
+          creationSource: "web" as const,
+          text: "Do the work",
+          attachments: [],
+        };
+        const work = Array.from({ length: 1_000 }, (_, index) =>
+          command(`work-${index + 1}`, "completed", 0, index + 1),
+        );
+        const older = [prompt, ...work.slice(0, -1)];
+        const tail = work.at(-1)!;
+        const requests: string[] = [];
+        let failed = false;
+        const harness = yield* makeHarness({
+          cached: { ...BASE_PROJECTION, turnItems: [tail], visibleTurnItems: [localRow(tail, 0)] },
+          cachedHistory: { historyCursor: "1000", hasMoreHistory: true },
+          historyHttpClient: HttpClient.make((request, url) => {
+            const cursor = url.searchParams.get("cursor")!;
+            requests.push(cursor);
+            if (cursor === "before-user")
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({
+                    snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+                    items: [],
+                    nextCursor: cursor,
+                    hasMoreHistory: true,
+                  }),
+                ),
+              );
+            if (cursor === "925" && !failed) {
+              failed = true;
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(request, new Response(null, { status: 503 })),
+              );
+            }
+            const end = Number(cursor);
+            expect(Number.isFinite(end)).toBe(true);
+            const start = Math.max(0, end - 75);
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                Response.json({
+                  snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+                  items: older.slice(start, end).map(localRow),
+                  nextCursor: start === 0 ? "before-user" : String(start),
+                  hasMoreHistory: true,
+                }),
+              ),
+            );
+          }),
+        });
+        expect((yield* harness.loadEarlier())._tag).toBe("error");
+        expect(requests).toEqual(["1000", "925"]);
+        expect(yield* harness.loadEarlier()).toEqual({ _tag: "loaded" });
+        const state = yield* SubscriptionRef.get(harness.threadState);
+        expect(
+          Option.getOrThrow(state.data).visibleTurnItems.map((row) => row.sourceItemId),
+        ).toEqual([prompt, ...work].map((item) => item.id));
+        expect(state.history).toMatchObject({
+          historyCursor: "before-user",
+          hasMoreHistory: true,
+          loading: false,
+        });
+        expect(requests.slice(1, 3)).toEqual(["925", "925"]);
+        expect(yield* harness.loadEarlier()).toEqual({
+          _tag: "error",
+          message: "History did not advance.",
+        });
+        expect((yield* SubscriptionRef.get(harness.threadState)).history.loading).toBe(false);
+      }),
+    );
     it.effect("loads deferred work on demand and resumes a failed page", () =>
       Effect.gen(function* () {
         const anchor = {
@@ -1415,6 +1494,17 @@ describe("EnvironmentThreads", () => {
           text: "COD4 result",
           streaming: false,
         };
+        const prompt = {
+          ...message,
+          id: "item:older-prompt",
+          messageId: "message:older-prompt",
+          ordinal: 0,
+          type: "user_message",
+          inputIntent: "turn_start",
+          createdBy: "user",
+          creationSource: "web",
+          attachments: [],
+        };
         const activity = {
           ...common,
           id: "item:older-command",
@@ -1437,6 +1527,16 @@ describe("EnvironmentThreads", () => {
         const harness = yield* makeHarness({
           historyHttpClient: HttpClient.make((request, url) =>
             Effect.gen(function* () {
+              if (url.searchParams.get("cursor") === "next-cursor")
+                return HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({
+                    snapshotSequence: 14,
+                    items: [projected(prompt, 0)],
+                    nextCursor: "before-prompt",
+                    hasMoreHistory: true,
+                  }),
+                );
               expect(url.searchParams.get("cursor")).toBe("progressive-cursor");
               const conversationOnly = url.searchParams.get("view") === "conversation";
               if (!conversationOnly && activityRequests++ === 0) {
@@ -1508,14 +1608,16 @@ describe("EnvironmentThreads", () => {
         const complete = yield* SubscriptionRef.get(harness.threadState);
         expect(complete.history).toMatchObject({
           loading: false,
-          historyCursor: "next-cursor",
+          historyCursor: mode === "retry" ? "before-prompt" : "next-cursor",
           error: null,
           latestLocalTurnOrdinal: 47,
         });
         expect(
           Option.getOrThrow(complete.data).visibleTurnItems.map((row) => row.sourceItemId),
-        ).toEqual([message.id, activity.id]);
-        expect(Option.getOrThrow(complete.data).turnItems).toHaveLength(2);
+        ).toEqual(
+          mode === "retry" ? [prompt.id, message.id, activity.id] : [message.id, activity.id],
+        );
+        expect(Option.getOrThrow(complete.data).turnItems).toHaveLength(mode === "retry" ? 3 : 2);
       }),
   );
 
