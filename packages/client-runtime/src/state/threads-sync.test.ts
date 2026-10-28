@@ -741,6 +741,7 @@ describe("EnvironmentThreads", () => {
           },
           cachedHistory: { historyCursor: "older", hasMoreHistory: true },
           historyHttpClient: HttpClient.make((request, url) => {
+            expect(url.searchParams.get("view")).toBe("work");
             const cursor = url.searchParams.get("cursor")!;
             requests.push(cursor);
             if (cursor === "second" && !failed) {

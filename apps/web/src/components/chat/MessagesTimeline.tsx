@@ -34,6 +34,7 @@ import {
   useContext,
   useLayoutEffect,
   useEffect,
+  useEffectEvent,
   useRef,
   useState,
   type ReactNode,
@@ -1570,15 +1571,17 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
         .map((workAnchorId) => loadWork({ environmentId, input: { threadId, workAnchorId } })),
     );
   };
+  const loadOnExpand = useEffectEvent(() => {
+    void load().then((results) =>
+      setFailed(
+        results.some((result) => result._tag === "Failure" || result.value._tag === "error"),
+      ),
+    );
+  });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restored expanded folds load their deferred server history on mount.
   useEffect(() => {
-    if (row.expanded)
-      void load().then((results) =>
-        setFailed(
-          results.some((result) => result._tag === "Failure" || result.value._tag === "error"),
-        ),
-      );
-  }, [row.expanded, load]);
+    if (row.expanded && anchorsKey && environmentId && threadId) loadOnExpand();
+  }, [row.expanded, anchorsKey, environmentId, threadId]);
   const error = anchorsKey && failed ? "Couldn't load work. Click to retry." : null;
   const loading = row.expanded && anchorsKey !== "" && !failed;
   const toggle = () => {

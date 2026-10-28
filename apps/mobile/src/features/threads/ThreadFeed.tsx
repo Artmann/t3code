@@ -1233,15 +1233,17 @@ function RunFoldButton({
         .map((workAnchorId) => loadWork({ environmentId, input: { threadId, workAnchorId } })),
     );
   };
+  const loadOnExpand = useEffectEvent(() => {
+    void load().then((results) =>
+      setFailed(
+        results.some((result) => result._tag === "Failure" || result.value._tag === "error"),
+      ),
+    );
+  });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restored expanded folds load their deferred server history on mount.
   useEffect(() => {
-    if (entry.expanded)
-      void load().then((results) =>
-        setFailed(
-          results.some((result) => result._tag === "Failure" || result.value._tag === "error"),
-        ),
-      );
-  }, [entry.expanded, load]);
+    if (entry.expanded && anchorsKey && environmentId && threadId) loadOnExpand();
+  }, [entry.expanded, anchorsKey, environmentId, threadId]);
   const error = anchorsKey && failed ? "Couldn't load work. Tap to retry." : null;
   const loading = entry.expanded && anchorsKey !== "" && !failed;
   const toggle = () => {
