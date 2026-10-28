@@ -924,16 +924,14 @@ describe("EnvironmentThreads", () => {
         ).pipe(Effect.forkChild({ startImmediately: true }));
         yield* Deferred.await(held);
         const dispatcher = new Scheduler.MixedScheduler("sync").makeDispatcher();
-        const loading = yield* harness
-          .loadEarlier()
-          .pipe(
-            Effect.forkChild({ startImmediately: true }),
-            Effect.provideService(Scheduler.Scheduler, {
-              executionMode: "sync",
-              shouldYield: () => false,
-              makeDispatcher: () => dispatcher,
-            }),
-          );
+        const loading = yield* harness.loadEarlier().pipe(
+          Effect.forkChild({ startImmediately: true }),
+          Effect.provideService(Scheduler.Scheduler, {
+            executionMode: "sync",
+            shouldYield: () => false,
+            makeDispatcher: () => dispatcher,
+          }),
+        );
         dispatcher.flush();
         yield* Deferred.succeed(release, undefined);
         yield* Fiber.join(replacement);
