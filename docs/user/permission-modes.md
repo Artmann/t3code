@@ -1,7 +1,8 @@
 # Permission modes
 
 Permission modes control when an agent needs your approval to act. Choose a mode in the message
-composer; it applies to that thread.
+composer; it applies to that thread. On iPhone in portrait, the composer shows the mode only when
+it differs from the default; tap the model to change it.
 
 Set the default for new threads in **Settings → Threads → New threads → Permissions**.
 Projects can override the environment default. New threads use this setting rather than the
