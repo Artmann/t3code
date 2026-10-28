@@ -262,10 +262,10 @@ jobs:
 
       # The download only changes with engines.node, so a cached copy keeps
       # releases off nodejs.org, which stalls on the runners some days.
-      - name: Cache target Node.js for the CLI executable
+      - name: Restore target Node.js for the CLI executable
         id: target_node_cache
         if: inputs.cli_archive && inputs.platform == 'win'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ runner.temp }}/node-download
           key: node-download-v${{ steps.target_node.outputs.version }}-win-${{ inputs.arch }}
@@ -287,6 +287,15 @@ jobs:
           fetch=(curl -fsSL --retry 5 --retry-all-errors --connect-timeout 10 --speed-limit 102400 --speed-time 30)
           "${fetch[@]}" -o "$dir/$name.zip" "https://nodejs.org/dist/v$VERSION/$name.zip"
           "${fetch[@]}" -o "$dir/SHASUMS256.txt" "https://nodejs.org/dist/v$VERSION/SHASUMS256.txt"
+          (cd "$dir" && grep " $name.zip\$" SHASUMS256.txt | sha256sum -c -)
+
+      # Saved right away so a later failure in this job still keeps the download.
+      - name: Save target Node.js for the CLI executable
+        if: inputs.cli_archive && inputs.platform == 'win' && steps.target_node_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/node-download
+          key: ${{ steps.target_node_cache.outputs.cache-primary-key }}
 
       - name: Install target Node.js for the CLI executable
         if: inputs.cli_archive && inputs.platform == 'win'
