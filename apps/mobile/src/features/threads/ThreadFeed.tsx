@@ -1261,29 +1261,45 @@ function RunFoldButton({
   };
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ expanded: entry.expanded, busy: loading }}
-      onPress={toggle}
-      hitSlop={4}
-      className="min-h-11 min-w-0 flex-1 flex-row items-center gap-2"
-      style={{ minHeight: Math.max(TURN_FOLD_HEIGHT - 3.5, rowSizing.estimatedRowHeight) }}
-    >
-      <Text
-        key={rowSizing.textSizeKey}
-        numberOfLines={1}
-        className="shrink font-t3-medium text-sm tabular-nums text-foreground-muted"
+    <View className="min-w-0 flex-1">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: entry.expanded, busy: loading }}
+        onPress={toggle}
+        hitSlop={4}
+        className="min-h-11 min-w-0 flex-1 flex-row items-center gap-2"
+        style={{ minHeight: Math.max(TURN_FOLD_HEIGHT - 3.5, rowSizing.estimatedRowHeight) }}
       >
-        {entry.label}
-        {loading ? " · Loading work..." : error ? ` · ${error}` : ""}
-      </Text>
-      <ThreadDisclosureChevron
-        expanded={entry.expanded}
-        collapsedDirection="right"
-        size={15}
-        tintColor={iconColor}
-      />
-    </Pressable>
+        <Text
+          key={rowSizing.textSizeKey}
+          numberOfLines={1}
+          className="shrink font-t3-medium text-sm tabular-nums text-foreground-muted"
+        >
+          {entry.label}
+          {error ? ` · ${error}` : ""}
+        </Text>
+        <ThreadDisclosureChevron
+          expanded={entry.expanded}
+          collapsedDirection="right"
+          size={15}
+          tintColor={iconColor}
+        />
+      </Pressable>
+      {loading ? (
+        <View
+          accessible={false}
+          importantForAccessibility="no-hide-descendants"
+          className="gap-2 px-1 pb-2"
+        >
+          {(["40%", "60%", "33%"] as const).map((width) => (
+            <View key={width} className="flex-row items-center gap-2">
+              <View className="size-3 rounded bg-subtle-strong" />
+              <View className="h-2.5 rounded-full bg-subtle-strong" style={{ width }} />
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
   );
 }
 
