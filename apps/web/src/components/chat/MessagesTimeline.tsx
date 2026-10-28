@@ -1641,7 +1641,7 @@ function useDeferredWorkLoading(
     if (row.expanded && anchorsKey && environmentId && threadId) loadOnExpand();
   }, [row.expanded, anchorsKey, environmentId, threadId]);
   const error = anchorsKey && failed ? "Couldn't load work. Click to retry." : null;
-  const loading = row.expanded && anchorsKey !== "" && !failed;
+  const loading = ref !== null && row.expanded && anchorsKey !== "" && !failed;
   const toggle = () => {
     setFailed(false);
     if (error && row.expanded) load();
