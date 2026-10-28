@@ -725,6 +725,25 @@ describe("EnvironmentThreads", () => {
       sourceItemId: item.id,
       item,
     });
+    const cachedItem = (item: OrchestrationV2TurnItem) => ({
+      ...BASE_PROJECTION,
+      turnItems: [item],
+      visibleTurnItems: [localRow(item, 0)],
+    });
+    const historyPage = (
+      request: Parameters<typeof HttpClientResponse.fromWeb>[0],
+      items: ReadonlyArray<ReturnType<typeof localRow>>,
+      nextCursor: string | null,
+    ) =>
+      HttpClientResponse.fromWeb(
+        request,
+        Response.json({
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+          items,
+          nextCursor,
+          hasMoreHistory: nextCursor !== null,
+        }),
+      );
     it.effect("loads a long unwrapped turn through its user message and resumes failed pages", () =>
       Effect.gen(function* () {
         const prompt = {
@@ -745,23 +764,12 @@ describe("EnvironmentThreads", () => {
         const requests: string[] = [];
         let failed = false;
         const harness = yield* makeHarness({
-          cached: { ...BASE_PROJECTION, turnItems: [tail], visibleTurnItems: [localRow(tail, 0)] },
+          cached: cachedItem(tail),
           cachedHistory: { historyCursor: "1000", hasMoreHistory: true },
           historyHttpClient: HttpClient.make((request, url) => {
             const cursor = url.searchParams.get("cursor")!;
             requests.push(cursor);
-            if (cursor === "before-user")
-              return Effect.succeed(
-                HttpClientResponse.fromWeb(
-                  request,
-                  Response.json({
-                    snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
-                    items: [],
-                    nextCursor: cursor,
-                    hasMoreHistory: true,
-                  }),
-                ),
-              );
+            if (cursor === "before-user") return Effect.succeed(historyPage(request, [], cursor));
             if (cursor === "925" && !failed) {
               failed = true;
               return Effect.succeed(
@@ -772,14 +780,10 @@ describe("EnvironmentThreads", () => {
             expect(Number.isFinite(end)).toBe(true);
             const start = Math.max(0, end - 75);
             return Effect.succeed(
-              HttpClientResponse.fromWeb(
+              historyPage(
                 request,
-                Response.json({
-                  snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
-                  items: older.slice(start, end).map(localRow),
-                  nextCursor: start === 0 ? "before-user" : String(start),
-                  hasMoreHistory: true,
-                }),
+                older.slice(start, end).map(localRow),
+                start === 0 ? "before-user" : String(start),
               ),
             );
           }),
@@ -813,11 +817,7 @@ describe("EnvironmentThreads", () => {
         const requests: string[] = [];
         let failed = false;
         const harness = yield* makeHarness({
-          cached: {
-            ...BASE_PROJECTION,
-            turnItems: [anchor],
-            visibleTurnItems: [localRow(anchor, 0)],
-          },
+          cached: cachedItem(anchor),
           cachedHistory: { historyCursor: "older", hasMoreHistory: true },
           historyHttpClient: HttpClient.make((request, url) => {
             expect(url.searchParams.get("view")).toBe("work");
@@ -830,19 +830,15 @@ describe("EnvironmentThreads", () => {
               );
             }
             return Effect.succeed(
-              HttpClientResponse.fromWeb(
+              historyPage(
                 request,
-                Response.json({
-                  snapshotSequence: 7,
-                  items: [
-                    localRow(
-                      command(`work-${cursor}`, "completed", 0, cursor === "first" ? 3 : 2),
-                      0,
-                    ),
-                  ],
-                  nextCursor: cursor === "first" ? "second" : null,
-                  hasMoreHistory: cursor === "first",
-                }),
+                [
+                  localRow(
+                    command(`work-${cursor}`, "completed", 0, cursor === "first" ? 3 : 2),
+                    0,
+                  ),
+                ],
+                cursor === "first" ? "second" : null,
               ),
             );
           }),
@@ -872,24 +868,12 @@ describe("EnvironmentThreads", () => {
           const asked = yield* Deferred.make<void>();
           const release = yield* Deferred.make<void>();
           const harness = yield* makeHarness({
-            cached: {
-              ...BASE_PROJECTION,
-              turnItems: [anchor],
-              visibleTurnItems: [localRow(anchor, 0)],
-            },
+            cached: cachedItem(anchor),
             historyHttpClient: HttpClient.make((request) =>
               Effect.gen(function* () {
                 yield* Deferred.succeed(asked, undefined);
                 yield* Deferred.await(release);
-                return HttpClientResponse.fromWeb(
-                  request,
-                  Response.json({
-                    snapshotSequence: 7,
-                    items: [],
-                    nextCursor: null,
-                    hasMoreHistory: false,
-                  }),
-                );
+                return historyPage(request, [], null);
               }),
             ),
           });
@@ -935,26 +919,14 @@ describe("EnvironmentThreads", () => {
         };
         const views: Array<string | null> = [];
         const harness = yield* makeHarness({
-          cached: {
-            ...BASE_PROJECTION,
-            turnItems: [anchor],
-            visibleTurnItems: [localRow(anchor, 0)],
-          },
+          cached: cachedItem(anchor),
           cachedHistory: { historyCursor: "older", hasMoreHistory: true },
           historyHttpClient: HttpClient.make((request, url) => {
             views.push(url.searchParams.get("view"));
             return Effect.succeed(
-              HttpClientResponse.fromWeb(
-                request,
-                url.searchParams.get("view") === "work"
-                  ? new Response("Unavailable", { status: 503 })
-                  : Response.json({
-                      snapshotSequence: 7,
-                      items: [localRow(message, 0)],
-                      nextCursor: null,
-                      hasMoreHistory: false,
-                    }),
-              ),
+              url.searchParams.get("view") === "work"
+                ? HttpClientResponse.fromWeb(request, new Response("Unavailable", { status: 503 }))
+                : historyPage(request, [localRow(message, 0)], null),
             );
           }),
         });

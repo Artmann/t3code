@@ -5,7 +5,6 @@ import type {
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
-import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
 
 /**
  * Every window stops at the byte budget. A window that holds a user turn also
@@ -61,7 +60,6 @@ type HistoryRow = Pick<
     readonly createdBy?: string;
     readonly runId?: string | null;
     readonly status?: OrchestrationV2TurnItem["status"];
-    readonly nodeId?: string | null;
     readonly parentItemId?: string | null;
     readonly ordinal?: number;
     readonly runStatus?: string | undefined;
@@ -190,33 +188,18 @@ const DEFERRED_WORK_ITEM_TYPES = [
   "dynamic_tool",
 ] as const;
 
-function isDeferrableWorkItem(
-  item: Pick<OrchestrationV2TurnItem, "type" | "status"> & {
-    readonly persistentOutput?: boolean;
-    readonly toolName?: string | null;
-    readonly output?: unknown;
-    readonly viewedImagePath?: string;
-  },
-): boolean {
-  if (item.status !== "completed" || item.persistentOutput === true) return false;
-  if (item.type === "dynamic_tool") {
-    const tool = { toolName: item.toolName, output: item.output };
-    if (
-      item.viewedImagePath !== undefined ||
-      htmlRenderFromToolItem(tool) !== undefined ||
-      mcpAppFromToolItem(tool) !== undefined
-    )
-      return false;
-  }
-  return DEFERRED_WORK_ITEM_TYPES.some((type) => type === item.type);
+function isDeferrableWorkItem(item: HistoryRow["item"]): boolean {
+  return (
+    item.status === "completed" &&
+    item.persistentOutput !== true &&
+    DEFERRED_WORK_ITEM_TYPES.some((type) => type === item.type)
+  );
 }
 
 export function deferWorkHistoryRows<Row extends HistoryRow>(
   items: ReadonlyArray<Row>,
-  runs: ReadonlyArray<{ readonly id: string; readonly status: string }> = [],
   inlineWorkItemLimit: number = THREAD_HISTORY_PAGE_POLICY.maxItems,
 ): Row[] {
-  const statuses = new Map(runs.map((run) => [run.id, run.status]));
   const blocked = new Set(
     items.flatMap(({ item }) =>
       item.runId != null &&
@@ -234,10 +217,9 @@ export function deferWorkHistoryRows<Row extends HistoryRow>(
     if (item.runId == null) continue;
     if (item.type === "user_message") segments.set(item.runId, (segments.get(item.runId) ?? 0) + 1);
     if (
-      ((item.runStatus ?? statuses.get(item.runId)) !== "completed" &&
-        item.attemptStatus !== "superseded") ||
+      (item.runStatus !== "completed" && item.attemptStatus !== "superseded") ||
       blocked.has(item.runId) ||
-      !isDeferrableWorkItem({ ...item, status: item.status ?? "idle" })
+      !isDeferrableWorkItem(item)
     )
       continue;
     const key = `${row.sourceThreadId}:${item.runId}:${segments.get(item.runId) ?? 0}:${item.attemptId ?? ""}`;
@@ -292,17 +274,14 @@ export function selectDeferredWorkPage<Row extends HistoryRow>(input: {
         row.sourceThreadId === anchor.sourceThreadId &&
         row.item.runId === anchor.item.runId &&
         row.item.attemptId === anchor.item.attemptId &&
-        isDeferrableWorkItem({ ...row.item, status: row.item.status ?? "idle" }),
+        isDeferrableWorkItem(row.item),
     );
   return selectOlderTimelinePage({
     items,
     exclusiveEndIndex: items.length,
     snapshotSequence: input.snapshotSequence,
     rowEncodedBytes: input.rowEncodedBytes,
-    policy: {
-      maxItems: THREAD_HISTORY_PAGE_POLICY.maxItems,
-      maxEncodedBytes: THREAD_HISTORY_PAGE_POLICY.maxEncodedBytes,
-    },
+    policy: THREAD_HISTORY_PAGE_POLICY,
   });
 }
 
@@ -415,7 +394,7 @@ export function selectRecentTimelineWindow(input: {
 }
 
 function findCursorIndex(
-  items: ReadonlyArray<Pick<HistoryRow, "sourceThreadId" | "sourceItemId">>,
+  items: ReadonlyArray<Pick<HistoryRow, "sourceThreadId" | "sourceItemId" | "position">>,
   cursor: ThreadHistoryCursorPayload,
 ): number {
   const byIdentity = items.findIndex(
@@ -424,7 +403,8 @@ function findCursorIndex(
   if (byIdentity !== -1) {
     return byIdentity;
   }
-  return Math.min(cursor.p, items.length);
+  const byPosition = items.findIndex((row) => row.position >= cursor.p);
+  return byPosition === -1 ? items.length : byPosition;
 }
 
 /**
@@ -490,7 +470,7 @@ export function selectHistoryPageFromCursor<Row extends HistoryRow>(input: {
  */
 export function missingInterruptRequests<Row extends HistoryRow>(
   items: ReadonlyArray<Row>,
-  page: ReadonlyArray<Pick<HistoryRow, "item" | "sourceThreadId" | "sourceItemId">>,
+  page: ReadonlyArray<Pick<HistoryRow, "item" | "sourceThreadId" | "sourceItemId" | "position">>,
 ): Row[] {
   const runs = new Set<string>();
   for (const row of page) {

@@ -1567,21 +1567,18 @@ function useDeferredWorkLoading(
   const anchorsKey = row.deferredWorkItemIds?.join("\n") ?? "";
   const [failed, setFailed] = useState(false);
   const load = () => {
-    if (!anchorsKey || environmentId === undefined || threadId === undefined)
-      return Promise.resolve([]);
-    return Promise.all(
+    if (!anchorsKey || environmentId === undefined || threadId === undefined) return;
+    void Promise.all(
       anchorsKey
         .split("\n")
         .map((workAnchorId) => loadWork({ environmentId, input: { threadId, workAnchorId } })),
-    );
-  };
-  const loadOnExpand = useEffectEvent(() => {
-    void load().then((results) =>
+    ).then((results) =>
       setFailed(
         results.some((result) => result._tag === "Failure" || result.value._tag === "error"),
       ),
     );
-  });
+  };
+  const loadOnExpand = useEffectEvent(load);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restored expanded folds load their deferred server history on mount.
   useEffect(() => {
     if (row.expanded && anchorsKey && environmentId && threadId) loadOnExpand();
@@ -1589,17 +1586,9 @@ function useDeferredWorkLoading(
   const error = anchorsKey && failed ? "Couldn't load work. Click to retry." : null;
   const loading = row.expanded && anchorsKey !== "" && !failed;
   const toggle = () => {
-    if (error && row.expanded) {
-      setFailed(false);
-      void load().then((results) =>
-        setFailed(
-          results.some((result) => result._tag === "Failure" || result.value._tag === "error"),
-        ),
-      );
-    } else {
-      setFailed(false);
-      onToggle();
-    }
+    setFailed(false);
+    if (error && row.expanded) load();
+    else onToggle();
   };
 
   return { loading, error, toggle };

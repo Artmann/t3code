@@ -128,17 +128,10 @@ export function mergeOlderHistoryIntoProjection(
         break;
       end += 1;
     }
-    const { deferredWork: _deferred, ...complete } = anchor.item;
-    const updated = {
-      ...anchor,
-      item:
-        work.nextCursor === null
-          ? complete
-          : {
-              ...anchor.item,
-              deferredWork: { ...deferred, cursor: work.nextCursor },
-            },
-    };
+    const item = { ...anchor.item };
+    if (work.nextCursor === null) delete item.deferredWork;
+    else item.deferredWork = { ...deferred, cursor: work.nextCursor };
+    const updated = { ...anchor, item };
     const section = [
       ...page,
       ...projection.visibleTurnItems

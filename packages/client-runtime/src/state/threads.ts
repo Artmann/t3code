@@ -664,34 +664,34 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     throughEntryId?: string,
     workAnchorId?: string,
   ): Effect.fn.Return<ThreadHistoryController.ThreadHistoryLoadEarlierResult> {
+    const workCursor = (latest: EnvironmentThreadState) =>
+      Option.getOrNull(latest.data)?.visibleTurnItems.find(
+        (row) => row.sourceItemId === workAnchorId,
+      )?.item.deferredWork?.cursor ?? null;
     const current = yield* SubscriptionRef.get(state);
-    const work = Option.getOrNull(current.data)?.visibleTurnItems.find(
-      (row) => row.sourceItemId === workAnchorId,
-    )?.item.deferredWork;
     const initialCursor =
-      work?.cursor ?? (workAnchorId === undefined ? current.history.historyCursor : null);
+      workAnchorId === undefined ? current.history.historyCursor : workCursor(current);
     if (
       current.status === "deleted" ||
       Option.isNone(current.data) ||
       initialCursor === null ||
       (workAnchorId === undefined && !current.history.hasMoreHistory)
-    ) {
-      return { _tag: "noop" } satisfies ThreadHistoryController.ThreadHistoryLoadEarlierResult;
-    }
-    if (workAnchorId === undefined && current.history.loading) {
-      return { _tag: "busy" } satisfies ThreadHistoryController.ThreadHistoryLoadEarlierResult;
-    }
+    )
+      return { _tag: "noop" };
+    if (workAnchorId === undefined && current.history.loading) return { _tag: "busy" };
     let requestCursor = initialCursor;
-
     const isCurrent = (latest: EnvironmentThreadState) =>
       workAnchorId === undefined
         ? isActiveHistoryRequestCursor(requestCursor, latest.history)
-        : Option.getOrNull(latest.data)?.visibleTurnItems.find(
-            (row) => row.sourceItemId === workAnchorId,
-          )?.item.deferredWork?.cursor === requestCursor;
+        : workCursor(latest) === requestCursor;
+    const staleResult = (
+      latest: EnvironmentThreadState,
+    ): ThreadHistoryController.ThreadHistoryLoadEarlierResult =>
+      workAnchorId !== undefined && workCursor(latest) !== null
+        ? { _tag: "error", message: "Work history changed. Retry loading it." }
+        : { _tag: "noop" };
     if (workAnchorId === undefined)
       yield* patchHistoryMeta((history) => ({ ...history, loading: true, error: null }));
-
     const failLoad = (message: string) =>
       SubscriptionRef.modify(
         state,
@@ -712,21 +712,21 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                       : latest.history,
                 },
               ]
-            : [{ _tag: "noop" }, latest],
+            : [staleResult(latest), latest],
       );
 
-    const runLoad: Effect.Effect<ThreadHistoryController.ThreadHistoryLoadEarlierResult> =
-      Effect.gen(function* () {
+    const runLoad = Effect.gen(function* () {
+      while (true) {
         const preparedOption = yield* SubscriptionRef.get(supervisor.prepared);
         if (Option.isNone(preparedOption) || Option.isNone(httpClient))
           return yield* failLoad("Environment is not connected.");
-
         const views =
           workAnchorId !== undefined
             ? ["work" as const]
             : throughEntryId === undefined
               ? [undefined]
               : ["conversation" as const, undefined];
+        let nextCursor: string | null = null;
         for (const view of views) {
           const pageResult = yield* fetchEnvironmentThreadHistoryPage({
             prepared: preparedOption.value,
@@ -741,16 +741,21 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             return yield* failLoad(formatHistoryError(pageResult.failure));
           const page = pageResult.success;
           const complete = view !== "conversation";
-          const continueToUser =
+          const keepPaging =
             complete &&
-            workAnchorId === undefined &&
-            throughEntryId === undefined &&
-            page.hasMoreHistory &&
-            !page.items.some(
-              ({ item }) => item.type === "user_message" && item.createdBy === "user",
+            (workAnchorId !== undefined
+              ? page.nextCursor !== null
+              : throughEntryId === undefined &&
+                page.hasMoreHistory &&
+                !page.items.some(
+                  ({ item }) => item.type === "user_message" && item.createdBy === "user",
+                ));
+          if (keepPaging && (page.nextCursor === null || page.nextCursor === requestCursor))
+            return yield* failLoad(
+              workAnchorId === undefined
+                ? "History did not advance."
+                : "Work history did not advance.",
             );
-          if (continueToUser && (page.nextCursor === null || page.nextCursor === requestCursor))
-            return yield* failLoad("History did not advance.");
           const waiting = yield* Ref.get(awaitingCompletion);
           const result = yield* applyLock.withPermits(1)(
             SubscriptionRef.modify(
@@ -761,7 +766,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                 ThreadHistoryController.ThreadHistoryLoadEarlierResult,
                 EnvironmentThreadState,
               ] => {
-                if (!isCurrent(latest)) return [{ _tag: "noop" }, latest];
+                if (!isCurrent(latest)) return [staleResult(latest), latest];
                 if (Option.isNone(latest.data) || latest.status === "deleted")
                   return [{ _tag: "noop" }, { ...latest, history: EMPTY_THREAD_HISTORY_META }];
                 return [
@@ -783,7 +788,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                         : latest.status,
                     history:
                       workAnchorId === undefined && complete
-                        ? { ...applyHistoryPageMeta(latest.history, page), loading: continueToUser }
+                        ? { ...applyHistoryPageMeta(latest.history, page), loading: keepPaging }
                         : { ...latest.history, expanded: true },
                   },
                 ];
@@ -792,15 +797,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           );
           if (result._tag !== "loaded") return result;
           if (complete) yield* remember;
-          if (continueToUser && page.nextCursor !== null) {
-            requestCursor = page.nextCursor;
-            return yield* runLoad;
-          }
+          nextCursor = keepPaging ? page.nextCursor : null;
         }
-        return { _tag: "loaded" } satisfies ThreadHistoryController.ThreadHistoryLoadEarlierResult;
-      });
-
-    const result = yield* runLoad.pipe(
+        if (nextCursor === null) return { _tag: "loaded" } as const;
+        requestCursor = nextCursor;
+      }
+    });
+    return yield* runLoad.pipe(
       Effect.onInterrupt(() =>
         SubscriptionRef.update(state, (latest) => ({
           ...latest,
@@ -808,17 +811,6 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         })),
       ),
     );
-    if (workAnchorId !== undefined && (result._tag === "loaded" || result._tag === "noop")) {
-      const remaining = Option.getOrNull(
-        (yield* SubscriptionRef.get(state)).data,
-      )?.visibleTurnItems.find((row) => row.sourceItemId === workAnchorId)?.item.deferredWork;
-      if (result._tag === "noop" && remaining !== undefined)
-        return { _tag: "error", message: "Work history changed. Retry loading it." };
-      if (remaining?.cursor === requestCursor)
-        return { _tag: "error", message: "Work history did not advance." };
-      if (remaining !== undefined) return yield* loadEarlier(undefined, workAnchorId);
-    }
-    return result;
   });
 
   // A cached item can stay running after the server finished it, and no event will ever

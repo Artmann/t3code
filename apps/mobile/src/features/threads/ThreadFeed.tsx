@@ -1226,20 +1226,18 @@ function RunFoldButton({
   const anchorsKey = entry.deferredWorkItemIds?.join("\n") ?? "";
   const [failed, setFailed] = useState(false);
   const load = () => {
-    if (!anchorsKey) return Promise.resolve([]);
-    return Promise.all(
+    if (!anchorsKey) return;
+    void Promise.all(
       anchorsKey
         .split("\n")
         .map((workAnchorId) => loadWork({ environmentId, input: { threadId, workAnchorId } })),
-    );
-  };
-  const loadOnExpand = useEffectEvent(() => {
-    void load().then((results) =>
+    ).then((results) =>
       setFailed(
         results.some((result) => result._tag === "Failure" || result.value._tag === "error"),
       ),
     );
-  });
+  };
+  const loadOnExpand = useEffectEvent(load);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restored expanded folds load their deferred server history on mount.
   useEffect(() => {
     if (entry.expanded && anchorsKey && environmentId && threadId) loadOnExpand();
@@ -1247,17 +1245,9 @@ function RunFoldButton({
   const error = anchorsKey && failed ? "Couldn't load work. Tap to retry." : null;
   const loading = entry.expanded && anchorsKey !== "" && !failed;
   const toggle = () => {
-    if (error && entry.expanded) {
-      setFailed(false);
-      void load().then((results) =>
-        setFailed(
-          results.some((result) => result._tag === "Failure" || result.value._tag === "error"),
-        ),
-      );
-    } else {
-      setFailed(false);
-      onToggle(entry.runId);
-    }
+    setFailed(false);
+    if (error && entry.expanded) load();
+    else onToggle(entry.runId);
   };
 
   return (

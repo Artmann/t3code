@@ -162,13 +162,13 @@ describe("threadHistoryPaging", () => {
       return { ...row, item: { ...row.item, runId: RUN, runStatus: "completed" } };
     });
     expect(deferWorkHistoryRows(work.slice(0, 75))).toHaveLength(75);
-    expect(deferWorkHistoryRows(work, [], 150)).toHaveLength(76);
+    expect(deferWorkHistoryRows(work, 150)).toHaveLength(76);
     const longWork = Array.from({ length: 151 }, (_, index) => ({
       ...makeRow(index),
       item: { ...makeRow(index).item, runId: RUN, runStatus: "completed" },
     }));
-    expect(deferWorkHistoryRows(longWork.slice(0, 150), [], 150)).toHaveLength(150);
-    expect(deferWorkHistoryRows(longWork, [], 150)[0]?.item.deferredWork?.itemCount).toBe(151);
+    expect(deferWorkHistoryRows(longWork.slice(0, 150), 150)).toHaveLength(150);
+    expect(deferWorkHistoryRows(longWork, 150)[0]?.item.deferredWork?.itemCount).toBe(151);
     const superseded = work.map((row) => ({
       ...row,
       item: { ...row.item, runStatus: "running", attemptId: "old", attemptStatus: "superseded" },
@@ -469,6 +469,18 @@ describe("threadHistoryPaging", () => {
     expect(page.items.map((row) => row.sourceItemId)).toEqual(["item-3", "item-4"]);
     expect(page.hasMoreHistory).toBe(true);
     expect(page.nextCursor).not.toBeNull();
+    const sparse = [makeRow(0), makeRow(10), makeRow(20)];
+    const middle = selectHistoryPageFromCursor({
+      items: sparse,
+      cursor: encodeThreadHistoryCursor({
+        snapshotSequence: 3,
+        sourceThreadId: THREAD,
+        sourceItemId: "item-hidden",
+        position: 15,
+      }),
+      snapshotSequence: 3,
+    });
+    expect(middle.items.map((row) => row.sourceItemId)).toEqual(["item-0", "item-10"]);
   });
 
   it("keeps cursor resolution stable when newer items append", () => {

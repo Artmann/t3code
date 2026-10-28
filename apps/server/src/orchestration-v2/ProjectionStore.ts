@@ -100,7 +100,6 @@ import {
   deferWorkHistoryRows,
   selectDeferredWorkPage,
   encodeThreadHistoryCursor,
-  decodeThreadHistoryCursor,
   olderHistoryPagePolicy,
   selectHistoryPageFromCursor,
   selectRecentTimelineWindow,
@@ -632,6 +631,14 @@ export interface ProjectionStoreV2Shape {
     ProjectionStoreV2Error
   >;
 }
+
+type ProjectionWindow = Omit<
+  Parameters<ProjectionStoreV2Shape["getThreadSnapshotWindow"]>[1],
+  "anchorThreadId"
+> & {
+  readonly suppressLocal?: boolean | undefined;
+  readonly historyAnchor?: { readonly threadId: ThreadId; readonly itemId: TurnItemId } | undefined;
+};
 
 export class ProjectionStoreV2 extends Context.Service<ProjectionStoreV2, ProjectionStoreV2Shape>()(
   "t3/orchestration-v2/ProjectionStore/ProjectionStoreV2",
@@ -2686,14 +2693,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     // Share selection so counting discarded ancestry preserves payload-read positions.
     const retainedWindowRows = Effect.fn("ProjectionStore.retainedWindowRows")(function* (
       threadId: ThreadId,
-      window: {
-        readonly rowLimit: number;
-        readonly userTurnLimit?: number | undefined;
-        readonly deferWork?: boolean | undefined;
-        readonly inlineWorkItemLimit?: number | undefined;
-        readonly anchorItemId?: TurnItemId | undefined;
-        readonly requiredRunId?: RunId | undefined;
-      },
+      window: ProjectionWindow,
     ) {
       const eligible = sql`
                 WITH eligible AS NOT MATERIALIZED (
@@ -2932,15 +2932,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const readCanonicalProjection = Effect.fn("ProjectionStore.readCanonicalProjection")(
       function* (
         threadId: ThreadId,
-        window?: {
-          readonly rowLimit: number;
-          readonly userTurnLimit?: number | undefined;
-          readonly deferWork?: boolean | undefined;
-          readonly inlineWorkItemLimit?: number | undefined;
-          readonly anchorItemId?: TurnItemId | undefined;
-          readonly requiredRunId?: RunId | undefined;
-          readonly suppressLocal?: boolean | undefined;
-        },
+        window?: ProjectionWindow,
         fields?: ReadonlyArray<ProjectionRecordField>,
         filter?: ProjectionRecordFilter,
       ) {
@@ -3543,36 +3535,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const readProjection: (
       threadId: ThreadId,
       seenThreadIds: ReadonlySet<ThreadId>,
-      window?: {
-        readonly rowLimit: number;
-        readonly userTurnLimit?: number | undefined;
-        readonly deferWork?: boolean | undefined;
-        readonly inlineWorkItemLimit?: number | undefined;
-        readonly anchorItemId?: TurnItemId | undefined;
-        readonly requiredRunId?: RunId | undefined;
-        readonly suppressLocal?: boolean | undefined;
-        readonly historyAnchor?:
-          | { readonly threadId: ThreadId; readonly itemId: TurnItemId }
-          | undefined;
-      },
+      window?: ProjectionWindow,
     ) => Effect.Effect<OrchestrationV2ThreadProjection, ProjectionStoreV2Error> = Effect.fn(
       "ProjectionStore.readProjection",
     )(
       function* (
         threadId: ThreadId,
         seenThreadIds: ReadonlySet<ThreadId>,
-        window?: {
-          readonly rowLimit: number;
-          readonly userTurnLimit?: number | undefined;
-          readonly deferWork?: boolean | undefined;
-          readonly inlineWorkItemLimit?: number | undefined;
-          readonly anchorItemId?: TurnItemId | undefined;
-          readonly requiredRunId?: RunId | undefined;
-          readonly suppressLocal?: boolean | undefined;
-          readonly historyAnchor?:
-            | { readonly threadId: ThreadId; readonly itemId: TurnItemId }
-            | undefined;
-        },
+        window?: ProjectionWindow,
       ) {
         const localWindow =
           window?.suppressLocal === true ||
@@ -5504,31 +5474,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               position,
               canonicalPosition: position,
             }));
-            let historyItems =
+            const historyItems =
               workMode === "deferred"
-                ? deferWorkHistoryRows(indexed, [], inlineWorkItemLimit)
+                ? deferWorkHistoryRows(indexed, inlineWorkItemLimit)
                 : indexed;
-            if (workMode === "deferred") {
-              const decoded = yield* Effect.try({
-                try: () => decodeThreadHistoryCursor(cursor),
-                catch: (cause) => new ProjectionStoreReadError({ threadId, cause }),
-              });
-              const anchor = indexed.find(
-                (row) => row.sourceThreadId === decoded.st && row.sourceItemId === decoded.si,
-              );
-              if (
-                anchor !== undefined &&
-                !historyItems.some(
-                  (row) =>
-                    row.sourceThreadId === anchor.sourceThreadId &&
-                    row.sourceItemId === anchor.sourceItemId,
-                )
-              ) {
-                historyItems = [...historyItems, anchor].sort(
-                  (left, right) => left.canonicalPosition - right.canonicalPosition,
-                );
-              }
-            }
             const selection = yield* Effect.try({
               try: () => {
                 const policy = olderHistoryPagePolicy({ items: indexed, cursor, throughEntryId });
@@ -5553,13 +5502,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               catch: (cause) => new ProjectionStoreReadError({ threadId, cause }),
             });
             const { page } = selection;
-            const policy =
-              workMode === "work"
-                ? {
-                    maxItems: THREAD_HISTORY_PAGE_POLICY.maxItems,
-                    maxEncodedBytes: THREAD_HISTORY_PAGE_POLICY.maxEncodedBytes,
-                  }
-                : selection.policy;
+            const policy = workMode === "work" ? THREAD_HISTORY_PAGE_POLICY : selection.policy;
             const end = (page.items.at(-1)?.canonicalPosition ?? -1) + 1;
             const hasUserTurns = index.visible
               .slice(0, end)
