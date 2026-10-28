@@ -658,6 +658,7 @@ const EnvironmentOrchestrationShellSnapshotQuery = Schema.Struct({
 
 const EnvironmentOrchestrationThreadBoundedSnapshotQuery = Schema.Struct({
   deferWork: Schema.optionalKey(Schema.String),
+  inlineWorkItemLimit: Schema.optionalKey(Schema.Literals(["75", "150"])),
   compactTurnItems: Schema.optionalKey(Schema.String),
   dedupeBodies: Schema.optionalKey(Schema.String),
   compactIds: Schema.optionalKey(Schema.String),
@@ -668,6 +669,7 @@ const EnvironmentOrchestrationThreadHistoryQuery = Schema.Struct({
   throughEntryId: Schema.optional(TrimmedNonEmptyString),
   view: Schema.optional(Schema.Literals(["conversation", "activity", "work"])),
   deferWork: Schema.optionalKey(Schema.String),
+  inlineWorkItemLimit: Schema.optionalKey(Schema.Literals(["75", "150"])),
   compactIds: Schema.optionalKey(Schema.String),
 });
 

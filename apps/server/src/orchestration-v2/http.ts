@@ -134,11 +134,13 @@ export const layer = HttpApiBuilder.group(
           typeof threadManagement.getThreadSnapshotWindow
         >[1]["anchorThreadId"],
         deferWork = false,
+        inlineWorkItemLimit?: number,
       ) {
         return yield* threadManagement
           .getThreadSnapshotWindow(threadId, {
             rowLimit: THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
             deferWork,
+            inlineWorkItemLimit,
             userTurnLimit:
               anchorItemId === undefined
                 ? THREAD_HISTORY_PAGE_POLICY.maxUserTurns
@@ -230,6 +232,7 @@ export const layer = HttpApiBuilder.group(
             undefined,
             undefined,
             args.query.deferWork === "1",
+            args.query.inlineWorkItemLimit === "150" ? 150 : 75,
           ).pipe(traceLocalHandlerWork);
           const bounded = buildBoundedThreadProjection({
             projection: snapshot.projection,
@@ -271,6 +274,7 @@ export const layer = HttpApiBuilder.group(
                 : args.query.deferWork === "1"
                   ? "deferred"
                   : undefined,
+              args.query.inlineWorkItemLimit === "150" ? 150 : 75,
             )
             .pipe(
               Effect.map((page) =>

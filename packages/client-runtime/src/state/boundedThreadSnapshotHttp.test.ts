@@ -8,6 +8,7 @@ import { PrimaryConnectionTarget, type PreparedConnection } from "../connection/
 import * as RpcHttp from "../rpc/http.ts";
 import * as BoundedThreadSnapshotHttp from "./boundedThreadSnapshotHttp.ts";
 import * as ThreadSnapshotLoader from "./threadSnapshotHttp.ts";
+import { ClientPresentation } from "../platform/capabilities.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: "environment-bounded" as never,
@@ -130,10 +131,10 @@ const idTableBody = () => {
 
 describe("boundedThreadSnapshotLoader", () => {
   it.effect.each([
-    ["an older server that ignores the opt-in", () => boundedBody(false)],
-    ["a server that sends compact turnItems", () => boundedBody(true)],
-    ["a server that also sends an ID table", idTableBody],
-  ] as const)("requests compact turnItems and loads %s", ([, body]) => {
+    ["an older server that ignores the opt-in", () => boundedBody(false), "web", "150"],
+    ["a server that sends compact turnItems", () => boundedBody(true), "mobile", "75"],
+    ["a server that also sends an ID table", idTableBody, "desktop", "150"],
+  ] as const)("requests compact turnItems and loads %s", ([, body, surface, workLimit]) => {
     const urls: string[] = [];
     const fetchFn = ((input: RequestInfo | URL) => {
       urls.push(String(input));
@@ -145,6 +146,7 @@ describe("boundedThreadSnapshotLoader", () => {
       const result = yield* loader.load(PREPARED, THREAD_ID);
       expect(new URL(urls[0]!).searchParams.get("compactTurnItems")).toBe("1");
       expect(new URL(urls[0]!).searchParams.get("compactIds")).toBe("1");
+      expect(new URL(urls[0]!).searchParams.get("inlineWorkItemLimit")).toBe(workLimit);
       expect(result._tag).toBe("present");
       if (result._tag !== "present") return;
       expect(result.snapshot.projection.turnItems.map((item) => String(item.id))).toEqual([
@@ -162,6 +164,7 @@ describe("boundedThreadSnapshotLoader", () => {
       Effect.provide(
         Layer.provide(BoundedThreadSnapshotHttp.layer, RpcHttp.layerRemoteHttpClient(fetchFn)),
       ),
+      Effect.provideService(ClientPresentation, { metadata: { surface } }),
     );
   });
 

@@ -212,6 +212,7 @@ function isDeferrableWorkItem(
 export function deferWorkHistoryRows<Row extends HistoryRow>(
   items: ReadonlyArray<Row>,
   runs: ReadonlyArray<{ readonly id: string; readonly status: string }> = [],
+  inlineWorkItemLimit: number = THREAD_HISTORY_PAGE_POLICY.maxItems,
 ): Row[] {
   const statuses = new Map(runs.map((run) => [run.id, run.status]));
   const blocked = new Set(
@@ -244,7 +245,7 @@ export function deferWorkHistoryRows<Row extends HistoryRow>(
   const omitted = new Set<Row>();
   const anchors = new Map<Row, Row>();
   for (const group of groups.values()) {
-    if (group.length <= THREAD_HISTORY_PAGE_POLICY.maxItems) continue;
+    if (group.length <= inlineWorkItemLimit) continue;
     const first = group[0]!;
     const last = group.at(-1)!;
     for (const row of group.slice(1)) omitted.add(row);

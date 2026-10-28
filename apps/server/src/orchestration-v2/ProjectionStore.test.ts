@@ -2009,6 +2009,27 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         workCursor = page.nextCursor;
       }
       assert.strictEqual(workIds.size, 999);
+      yield* sql`UPDATE orchestration_v2_projection_turn_items SET run_id = NULL,
+        payload_json = json_set(payload_json, '$.runId', NULL)
+        WHERE thread_id = ${threadId} AND ordinal > 1 AND ordinal < 851`;
+      for (const inlineWorkItemLimit of [75, 150]) {
+        const window = yield* projectionStore.getThreadSnapshotWindow(threadId, {
+          rowLimit: sqlPageLimit,
+          userTurnLimit: 10,
+          deferWork: true,
+          inlineWorkItemLimit,
+        });
+        assert.strictEqual(
+          window.projection.visibleTurnItems.some(
+            (row) => row.item.deferredWork?.itemCount === 150,
+          ),
+          inlineWorkItemLimit === 75,
+        );
+      }
+      yield* sql`UPDATE orchestration_v2_projection_turn_items
+        SET run_id = 'run:bounded-sql-history:1',
+          payload_json = json_set(payload_json, '$.runId', 'run:bounded-sql-history:1')
+        WHERE thread_id = ${threadId}`;
       yield* sql`UPDATE orchestration_v2_projection_turn_items SET ordinal = 999,
         payload_json = json_set(payload_json, '$.ordinal', 999)
         WHERE turn_item_id = 'turn-item:bounded-sql-history:999'`;

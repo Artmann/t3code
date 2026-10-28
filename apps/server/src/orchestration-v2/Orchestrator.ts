@@ -345,6 +345,7 @@ export interface OrchestratorV2Shape {
     throughEntryId?: string,
     conversationOnly?: boolean,
     workMode?: "deferred" | "work",
+    inlineWorkItemLimit?: number,
   ) => Effect.Effect<OrchestrationV2ThreadHistoryPage, OrchestratorV2Error>;
   readonly getTimelinePage: (
     threadId: ThreadId,
@@ -13278,9 +13279,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
     }),
     getThreadHistoryPage: Effect.fn("OrchestratorV2.getThreadHistoryPage")(
-      function (threadId, cursor, throughEntryId, conversationOnly, workMode) {
+      function (threadId, cursor, throughEntryId, conversationOnly, workMode, inlineWorkItemLimit) {
         return projectionStore
-          .getThreadHistoryPage(threadId, cursor, throughEntryId, conversationOnly, workMode)
+          .getThreadHistoryPage(
+            threadId,
+            cursor,
+            throughEntryId,
+            conversationOnly,
+            workMode,
+            inlineWorkItemLimit,
+          )
           .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
       },
     ),

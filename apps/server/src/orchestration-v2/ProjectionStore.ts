@@ -421,6 +421,7 @@ export interface ProjectionStoreV2Shape {
     throughEntryId?: string,
     conversationOnly?: boolean,
     workMode?: "deferred" | "work",
+    inlineWorkItemLimit?: number,
   ) => Effect.Effect<OrchestrationV2ThreadHistoryPage, ProjectionStoreV2Error>;
   readonly getTimelinePage: (
     threadId: ThreadId,
@@ -617,6 +618,7 @@ export interface ProjectionStoreV2Shape {
       readonly rowLimit: number;
       readonly userTurnLimit?: number | undefined;
       readonly deferWork?: boolean | undefined;
+      readonly inlineWorkItemLimit?: number | undefined;
       readonly anchorItemId?: TurnItemId | undefined;
       readonly anchorThreadId?: ThreadId | undefined;
       readonly requiredRunId?: RunId | undefined;
@@ -2688,6 +2690,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly rowLimit: number;
         readonly userTurnLimit?: number | undefined;
         readonly deferWork?: boolean | undefined;
+        readonly inlineWorkItemLimit?: number | undefined;
         readonly anchorItemId?: TurnItemId | undefined;
         readonly requiredRunId?: RunId | undefined;
       },
@@ -2854,7 +2857,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   SELECT run_id, segment, MIN(ordinal) AS first_ordinal,
                     MAX(ordinal) AS last_ordinal, COUNT(*) AS item_count
                   FROM work_segments WHERE can_defer = 1
-                  GROUP BY run_id, segment HAVING COUNT(*) > ${THREAD_HISTORY_PAGE_POLICY.maxItems}
+                  GROUP BY run_id, segment HAVING COUNT(*) > ${window.inlineWorkItemLimit ?? THREAD_HISTORY_PAGE_POLICY.maxItems}
                 ), window_items AS NOT MATERIALIZED (
                   SELECT item_rowid, ordinal, turn_item_id, run_id, type
                   FROM eligible WHERE ${window.deferWork ? 1 : 0} = 0
@@ -2923,6 +2926,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           readonly rowLimit: number;
           readonly userTurnLimit?: number | undefined;
           readonly deferWork?: boolean | undefined;
+          readonly inlineWorkItemLimit?: number | undefined;
           readonly anchorItemId?: TurnItemId | undefined;
           readonly requiredRunId?: RunId | undefined;
           readonly suppressLocal?: boolean | undefined;
@@ -3533,6 +3537,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly rowLimit: number;
         readonly userTurnLimit?: number | undefined;
         readonly deferWork?: boolean | undefined;
+        readonly inlineWorkItemLimit?: number | undefined;
         readonly anchorItemId?: TurnItemId | undefined;
         readonly requiredRunId?: RunId | undefined;
         readonly suppressLocal?: boolean | undefined;
@@ -3550,6 +3555,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           readonly rowLimit: number;
           readonly userTurnLimit?: number | undefined;
           readonly deferWork?: boolean | undefined;
+          readonly inlineWorkItemLimit?: number | undefined;
           readonly anchorItemId?: TurnItemId | undefined;
           readonly requiredRunId?: RunId | undefined;
           readonly suppressLocal?: boolean | undefined;
@@ -3663,6 +3669,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   rowLimit: window.rowLimit,
                   userTurnLimit: window.userTurnLimit,
                   deferWork: window.deferWork,
+                  inlineWorkItemLimit: window.inlineWorkItemLimit,
                   requiredRunId: forkedFrom.runId,
                   suppressLocal: anchor === undefined || anchorIsInDescendant,
                   ...(anchor === undefined || anchorIsInDescendant
@@ -5449,6 +5456,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       throughEntryId,
       conversationOnly,
       workMode,
+      inlineWorkItemLimit,
     ) =>
       sql
         .withTransaction(
@@ -5467,7 +5475,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               position,
               canonicalPosition: position,
             }));
-            let historyItems = workMode === "deferred" ? deferWorkHistoryRows(indexed) : indexed;
+            let historyItems =
+              workMode === "deferred"
+                ? deferWorkHistoryRows(indexed, [], inlineWorkItemLimit)
+                : indexed;
             if (workMode === "deferred") {
               const decoded = yield* Effect.try({
                 try: () => decodeThreadHistoryCursor(cursor),
@@ -5683,6 +5694,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               rowLimit: options.rowLimit,
               userTurnLimit: options.userTurnLimit,
               deferWork: options.deferWork,
+              inlineWorkItemLimit: options.inlineWorkItemLimit,
               ...(historyAnchor?.threadId === threadId
                 ? { anchorItemId: historyAnchor.itemId }
                 : {}),

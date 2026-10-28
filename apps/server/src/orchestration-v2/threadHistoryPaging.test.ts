@@ -156,12 +156,19 @@ function makeProjection(visibleTurnItems: OrchestrationV2ProjectedTurnItem[]) {
 }
 
 describe("threadHistoryPaging", () => {
-  it("defers only completed work beyond 75 items and keeps conversation and persistent rows", () => {
+  it("defers completed work above the client limit and keeps conversation and persistent rows", () => {
     const work = Array.from({ length: 76 }, (_, index) => {
       const row = makeRow(index);
       return { ...row, item: { ...row.item, runId: RUN, runStatus: "completed" } };
     });
     expect(deferWorkHistoryRows(work.slice(0, 75))).toHaveLength(75);
+    expect(deferWorkHistoryRows(work, [], 150)).toHaveLength(76);
+    const longWork = Array.from({ length: 151 }, (_, index) => ({
+      ...makeRow(index),
+      item: { ...makeRow(index).item, runId: RUN, runStatus: "completed" },
+    }));
+    expect(deferWorkHistoryRows(longWork.slice(0, 150), [], 150)).toHaveLength(150);
+    expect(deferWorkHistoryRows(longWork, [], 150)[0]?.item.deferredWork?.itemCount).toBe(151);
     const compaction = {
       ...work[0]!,
       sourceItemId: TurnItemId.make("compaction"),

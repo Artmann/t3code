@@ -14,6 +14,7 @@ import {
   withOrchestrationProtocolHeader,
 } from "./environmentHttpAuth.ts";
 import * as ThreadSnapshotLoader from "./threadSnapshotHttp.ts";
+import { clientInlineWorkItemLimit } from "./threadHistoryHttp.ts";
 
 const DEFAULT_BOUNDED_THREAD_SNAPSHOT_TIMEOUT_MS = 6_000;
 
@@ -28,9 +29,16 @@ export const fetchEnvironmentBoundedThreadSnapshot = Effect.fn(
   >;
   readonly timeoutMs?: number;
 }) {
+  const inlineWorkItemLimit = yield* clientInlineWorkItemLimit;
   const endpoint = {
     params: { threadId: input.threadId },
-    query: { compactTurnItems: "1", dedupeBodies: "1", compactIds: "1", deferWork: "1" },
+    query: {
+      compactTurnItems: "1",
+      dedupeBodies: "1",
+      compactIds: "1",
+      deferWork: "1",
+      inlineWorkItemLimit: inlineWorkItemLimit === 150 ? ("150" as const) : ("75" as const),
+    },
   };
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,

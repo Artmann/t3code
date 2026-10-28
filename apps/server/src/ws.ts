@@ -771,6 +771,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     readonly requestCompletionMarker?: boolean;
     readonly acceptBoundedSnapshot?: boolean;
     readonly acceptDeferredWork?: boolean;
+    readonly inlineWorkItemLimit?: 75 | 150;
     readonly acceptCompactTurnItems?: boolean;
     readonly acceptDedupedBodies?: boolean;
     readonly acceptCompactIds?: boolean;
@@ -859,6 +860,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
           ? threadManagement.getThreadSnapshotWindow(input.threadId, {
               rowLimit: THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
               deferWork: input.acceptDeferredWork === true,
+              inlineWorkItemLimit: input.inlineWorkItemLimit,
               userTurnLimit: THREAD_HISTORY_PAGE_POLICY.maxUserTurns,
             })
           : threadManagement.getThreadSnapshot(input.threadId)
